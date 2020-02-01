@@ -24,6 +24,9 @@ namespace GZipTest
             {
                 var arguments = ParseArgs(args);
 
+                ArgumentsChecker.CheckSourceFile(arguments.SourceFilePath);
+                ArgumentsChecker.CheckDestinationFile(arguments.DestinationFilePath);
+
                 switch (arguments.TaskType)
                 {
                     case TaskType.Unknown:
@@ -43,6 +46,7 @@ namespace GZipTest
             catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
+                Console.ReadKey();
                 return 1;
             }
 

@@ -44,6 +44,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Arguments.cs" />
+    <Compile Include="ArgumentsChecker.cs" />
     <Compile Include="ByteBlock.cs" />
     <Compile Include="Compressor.cs" />
     <Compile Include="Decompressor.cs" />

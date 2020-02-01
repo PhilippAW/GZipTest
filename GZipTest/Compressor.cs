@@ -23,26 +23,33 @@ namespace GZipTest
 
         protected override void Read()
         {
-            using (var fileToBeCompressed = new FileStream(_sourceFile, FileMode.Open))
+            try
             {
-                int bytesToRead;
-                byte[] lastBuffer;
-
-                while (fileToBeCompressed.Position < fileToBeCompressed.Length && !_cancelled)
+                using (var fileToBeCompressed = new FileStream(_sourceFile, FileMode.Open))
                 {
-                    if ((fileToBeCompressed.Length - fileToBeCompressed.Position) <= _blockSize)
-                        bytesToRead = (int)(fileToBeCompressed.Length - fileToBeCompressed.Position);
-                    else
-                        bytesToRead = _blockSize;
+                    int bytesToRead;
+                    byte[] lastBuffer;
 
-                    lastBuffer = new byte[bytesToRead];
-                    fileToBeCompressed.Read(lastBuffer, 0, bytesToRead);
-                    var newBlock = new ByteBlock(_blockId, lastBuffer, new byte[0]);
-                    _readerQueue.Enqueue(newBlock);
-                    _blockId++;
-                    _readCounter++;
+                    while (fileToBeCompressed.Position < fileToBeCompressed.Length && !_cancelled)
+                    {
+                        if ((fileToBeCompressed.Length - fileToBeCompressed.Position) <= _blockSize)
+                            bytesToRead = (int)(fileToBeCompressed.Length - fileToBeCompressed.Position);
+                        else
+                            bytesToRead = _blockSize;
+
+                        lastBuffer = new byte[bytesToRead];
+                        fileToBeCompressed.Read(lastBuffer, 0, bytesToRead);
+                        var newBlock = new ByteBlock(_blockId, lastBuffer, new byte[0]);
+                        _readerQueue.Enqueue(newBlock);
+                        _blockId++;
+                        _readCounter++;
+                    }
+                    _isReadCompleted = true;
                 }
-                _isReadCompleted = true;
+            }
+            catch (Exception)
+            {
+                throw;
             }
         }
 
