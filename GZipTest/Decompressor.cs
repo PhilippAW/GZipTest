@@ -24,91 +24,116 @@ namespace GZipTest
 
         protected override void Read()
         {
-            using (FileStream compressedFile = new FileStream(_sourceFile, FileMode.Open))
+
+            try
             {
-                while (compressedFile.Position < compressedFile.Length)
+                using (FileStream compressedFile = new FileStream(_sourceFile, FileMode.Open))
                 {
-                    byte[] blockLengthBuffer = new byte[8];
-                    compressedFile.Read(blockLengthBuffer, 0, blockLengthBuffer.Length);
-                    int blockLength = BitConverter.ToInt32(blockLengthBuffer, 4);
-                    byte[] compressedData = new byte[blockLength];
-                    blockLengthBuffer.CopyTo(compressedData, 0);
+                    while (compressedFile.Position < compressedFile.Length)
+                    {
+                        byte[] blockLengthBuffer = new byte[8];
+                        compressedFile.Read(blockLengthBuffer, 0, blockLengthBuffer.Length);
+                        int blockLength = BitConverter.ToInt32(blockLengthBuffer, 4);
+                        byte[] compressedData = new byte[blockLength];
+                        blockLengthBuffer.CopyTo(compressedData, 0);
 
-                    compressedFile.Read(compressedData, 8, blockLength - 8);
-                    int dataSize = BitConverter.ToInt32(compressedData, blockLength - 4);
-                    byte[] lastBuffer = new byte[dataSize];
+                        compressedFile.Read(compressedData, 8, blockLength - 8);
+                        int dataSize = BitConverter.ToInt32(compressedData, blockLength - 4);
+                        byte[] lastBuffer = new byte[dataSize];
 
-                    ByteBlock block = new ByteBlock(_counter, lastBuffer, compressedData);
-                    _readerQueue.Enqueue(block);
-                    _counter++;
-                    _readCounter++;
+                        ByteBlock block = new ByteBlock(_counter, lastBuffer, compressedData);
+                        _readerQueue.Enqueue(block);
+                        _counter++;
+                        _readCounter++;
+                    }
+
+                    _isReadCompleted = true;
                 }
-
-                _isReadCompleted = true;
+            }
+            catch (Exception ex)
+            {
+                _errorMessage = ex.Message;
+                _isError = true;
             }
         }
 
         protected override void Write()
         {
-            using (FileStream decompressedFile = new FileStream(_destinationFile, FileMode.Append))
+            try
             {
-                int counter = 0;
-                while (true && !_cancelled)
+                using (FileStream decompressedFile = new FileStream(_destinationFile, FileMode.Append))
                 {
-                    if (_writerQueue.Count == 0 && !_isActionCompleted)
-                        continue;
-
-                    if (!_writerQueue.TryDequeue(out ByteBlock block))
+                    int counter = 0;
+                    while (true && !_isCancelled)
                     {
-                        if (_readCounter != counter)
+                        if (_writerQueue.Count == 0 && !_isActionCompleted)
                             continue;
-                        else
-                            break;
+
+                        if (!_writerQueue.TryDequeue(out ByteBlock block))
+                        {
+                            if (_readCounter != counter)
+                                continue;
+                            else
+                                break;
+                        }
+
+                        decompressedFile.Write(block.Buffer, 0, block.Buffer.Length);
+                        counter++;
                     }
 
-                    decompressedFile.Write(block.Buffer, 0, block.Buffer.Length);
-                    counter++;
+                    _readerResetEvent.Set();
                 }
-
-                _readerResetEvent.Set();
+            }
+            catch (Exception ex)
+            {
+                _errorMessage = ex.Message;
+                _isError = true;
             }
         }
 
         protected override void Action(object i)
         {
-            while (true && !_cancelled)
+            try
             {
-                if (_readerQueue.Count == 0 && !_isReadCompleted)
-                    continue;
-
-                if (!_readerQueue.TryDequeue(out ByteBlock block))
-                    break;
-
-                using (MemoryStream stream = new MemoryStream(block.CompressedBuffer))
+                while (true && !_isCancelled)
                 {
-                    using (GZipStream gZipStream = new GZipStream(stream, CompressionMode.Decompress))
+                    if (_readerQueue.Count == 0 && !_isReadCompleted)
+                        continue;
+
+                    if (!_readerQueue.TryDequeue(out ByteBlock block))
+                        break;
+
+                    using (MemoryStream stream = new MemoryStream(block.CompressedBuffer))
                     {
-                        gZipStream.Read(block.Buffer, 0, block.Buffer.Length);
-                        var decompressedData = block.Buffer.ToArray();
-                        ByteBlock block2 = new ByteBlock(block.Id, decompressedData, new byte[0]);
-
-                        lock (_locker)
+                        using (GZipStream gZipStream = new GZipStream(stream, CompressionMode.Decompress))
                         {
-                            while (block2.Id != _currentBlockId)
-                            {
-                                Monitor.Wait(_locker);
-                            }
+                            gZipStream.Read(block.Buffer, 0, block.Buffer.Length);
+                            var decompressedData = block.Buffer.ToArray();
+                            ByteBlock block2 = new ByteBlock(block.Id, decompressedData, new byte[0]);
 
-                            _writerQueue.Enqueue(block2);
-                            _currentBlockId++;
-                            Monitor.PulseAll(_locker);
+                            lock (_locker)
+                            {
+                                while (block2.Id != _currentBlockId)
+                                {
+                                    Monitor.Wait(_locker);
+                                }
+
+                                _writerQueue.Enqueue(block2);
+                                _currentBlockId++;
+                                Monitor.PulseAll(_locker);
+                            }
                         }
                     }
                 }
-            }
 
-            _isActionCompleted = true;
-            _doneEvents[(int)i].Set();
+                _isActionCompleted = true;
+                _doneEvents[(int)i].Set();
+            }
+            catch (Exception ex)
+            {
+                _errorMessage = ex.Message;
+                _isError = true;
+            }
         }
     }
 }

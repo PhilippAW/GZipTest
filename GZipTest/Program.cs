@@ -42,6 +42,19 @@ namespace GZipTest
                 if (z != null)
                     z.Start();
 
+                if (z.IsError)
+                {
+                    Console.WriteLine(z.ErrorMessage);
+                    return 1;
+                }
+
+                if (z.IsCancelled)
+                {
+                    Console.WriteLine("Cancelled by user");
+                    return 1;
+                }
+
+                return 0;
             }
             catch (Exception ex)
             {
@@ -49,9 +62,6 @@ namespace GZipTest
                 Console.ReadKey();
                 return 1;
             }
-
-            Console.ReadKey();
-            return 0;
         }
 
         private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)

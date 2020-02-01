@@ -30,7 +30,7 @@ namespace GZipTest
                     int bytesToRead;
                     byte[] lastBuffer;
 
-                    while (fileToBeCompressed.Position < fileToBeCompressed.Length && !_cancelled)
+                    while (fileToBeCompressed.Position < fileToBeCompressed.Length && !_isCancelled)
                     {
                         if ((fileToBeCompressed.Length - fileToBeCompressed.Position) <= _blockSize)
                             bytesToRead = (int)(fileToBeCompressed.Length - fileToBeCompressed.Position);
@@ -47,75 +47,92 @@ namespace GZipTest
                     _isReadCompleted = true;
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                throw;
+                _errorMessage = ex.Message;
+                _isError = true;
             }
         }
 
         protected override void Write()
         {
-            using (FileStream fileCompressed = new FileStream(_destinationFile, FileMode.Append))
+            try
             {
-                int counter = 0;
-                while (true && !_cancelled)
+                using (FileStream fileCompressed = new FileStream(_destinationFile, FileMode.Append))
                 {
-                    if (_writerQueue.Count == 0 && !_isActionCompleted)
-                        continue;
-
-                    if (!_writerQueue.TryDequeue(out ByteBlock block))
+                    int counter = 0;
+                    while (true && !_isCancelled)
                     {
-                        if (_readCounter != counter)
+                        if (_writerQueue.Count == 0 && !_isActionCompleted)
                             continue;
-                        else
-                            break;
+
+                        if (!_writerQueue.TryDequeue(out ByteBlock block))
+                        {
+                            if (_readCounter != counter)
+                                continue;
+                            else
+                                break;
+                        }
+
+                        BitConverter.GetBytes(block.Buffer.Length).CopyTo(block.Buffer, 4);
+                        fileCompressed.Write(block.Buffer, 0, block.Buffer.Length);
+                        counter++;
                     }
 
-                    BitConverter.GetBytes(block.Buffer.Length).CopyTo(block.Buffer, 4);
-                    fileCompressed.Write(block.Buffer, 0, block.Buffer.Length);
-                    counter++;
+                    _readerResetEvent.Set();
                 }
-
-                _readerResetEvent.Set();
+            }
+            catch (Exception ex)
+            {
+                _errorMessage = ex.Message;
+                _isError = true;
             }
         }
 
         protected override void Action(object i)
         {
-            while (true && !_cancelled)
+            try
             {
-                if (_readerQueue.Count == 0 && !_isReadCompleted)
-                    continue;
-
-                if (!_readerQueue.TryDequeue(out ByteBlock block))
-                    break;
-
-                using (MemoryStream stream = new MemoryStream())
+                while (true && !_isCancelled)
                 {
-                    using (GZipStream gZipStream = new GZipStream(stream, CompressionMode.Compress))
-                    {
-                        gZipStream.Write(block.Buffer, 0, block.Buffer.Length);
-                    }
+                    if (_readerQueue.Count == 0 && !_isReadCompleted)
+                        continue;
 
-                    byte[] compressedData = stream.ToArray();
-                    ByteBlock outData = new ByteBlock(block.Id, compressedData, new byte[0]);
+                    if (!_readerQueue.TryDequeue(out ByteBlock block))
+                        break;
 
-                    lock (_locker)
+                    using (MemoryStream stream = new MemoryStream())
                     {
-                        while (outData.Id != _currentBlockId)
+                        using (GZipStream gZipStream = new GZipStream(stream, CompressionMode.Compress))
                         {
-                            Monitor.Wait(_locker);
+                            gZipStream.Write(block.Buffer, 0, block.Buffer.Length);
                         }
 
-                        _writerQueue.Enqueue(outData);
-                        _currentBlockId++;
-                        Monitor.PulseAll(_locker);
+                        byte[] compressedData = stream.ToArray();
+                        ByteBlock outData = new ByteBlock(block.Id, compressedData, new byte[0]);
+
+                        lock (_locker)
+                        {
+                            while (outData.Id != _currentBlockId)
+                            {
+                                Monitor.Wait(_locker);
+                            }
+
+                            _writerQueue.Enqueue(outData);
+                            _currentBlockId++;
+                            Monitor.PulseAll(_locker);
+                        }
                     }
                 }
-            }
 
-            _doneEvents[(int)i].Set();
-            _isActionCompleted = true;
+                _doneEvents[(int)i].Set();
+                _isActionCompleted = true;
+            }
+            catch (Exception ex)
+            {
+                _errorMessage = ex.Message;
+                _isError = true;
+            }
         }
     }
 }

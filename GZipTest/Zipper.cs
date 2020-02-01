@@ -9,8 +9,10 @@ namespace GZipTest
         protected string _sourceFile;
         protected string _destinationFile;
         protected int _currentBlockId;
-        protected bool _cancelled = false;
+        protected bool _isCancelled = false;
         protected bool _success;
+        protected bool _isError;
+        protected string _errorMessage;
 
         protected int _blockSize = 10000000;
         protected ConcurrentQueue<ByteBlock> _readerQueue = new ConcurrentQueue<ByteBlock>();
@@ -34,6 +36,12 @@ namespace GZipTest
             _destinationFile = destinationFile;
         }
 
+        public bool IsError { get { return _isError; } }
+
+        public bool IsCancelled { get { return _isCancelled; } }
+
+        public string ErrorMessage { get { return _errorMessage; } }
+
         protected int ThreadsCount { get; private set; }
 
         public void Start()
@@ -55,7 +63,7 @@ namespace GZipTest
 
             WaitHandle.WaitAll(_doneEvents);
 
-            if (!_cancelled)
+            if (!_isCancelled && !_isError)
             {
                 _success = true;
             }
@@ -63,7 +71,7 @@ namespace GZipTest
 
         public void Cancel()
         {
-            _cancelled = true;
+            _isCancelled = true;
         }
 
         protected abstract void Read();
