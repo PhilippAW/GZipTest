@@ -47,6 +47,7 @@
     <Compile Include="ArgumentsChecker.cs" />
     <Compile Include="ByteBlock.cs" />
     <Compile Include="Compressor.cs" />
+    <Compile Include="CustomQueue.cs" />
     <Compile Include="Decompressor.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

@@ -45,15 +45,18 @@ namespace GZipTest
                 if (z.IsError)
                 {
                     Console.WriteLine(z.ErrorMessage);
+                    Console.ReadKey();
                     return 1;
                 }
 
                 if (z.IsCancelled)
                 {
                     Console.WriteLine("Cancelled by user");
+                    Console.ReadKey();
                     return 1;
                 }
-
+                Console.WriteLine("Success");
+                Console.ReadKey();
                 return 0;
             }
             catch (Exception ex)

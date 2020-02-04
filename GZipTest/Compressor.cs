@@ -1,7 +1,6 @@
 ﻿using System;
 using System.IO;
 using System.IO.Compression;
-using System.Threading;
 
 namespace GZipTest
 {
@@ -9,16 +8,12 @@ namespace GZipTest
     {
         private volatile int _blockId;
         private volatile bool _isReadCompleted;
-        private volatile bool _isActionCompleted;
-        private volatile int _readCounter = 0;
-        private object _locker;
+        private int _blocksCount;
 
         public Compressor(string sourceFile, string destinationFile) : base(sourceFile, destinationFile)
         {
             _blockId = 0;
             _isReadCompleted = false;
-            _isActionCompleted = false;
-            _locker = new object();
         }
 
         protected override void Read()
@@ -32,6 +27,9 @@ namespace GZipTest
 
                     while (fileToBeCompressed.Position < fileToBeCompressed.Length && !_isCancelled)
                     {
+                        if (_readerQueue2.Count > 10)
+                            continue;
+
                         if ((fileToBeCompressed.Length - fileToBeCompressed.Position) <= _blockSize)
                             bytesToRead = (int)(fileToBeCompressed.Length - fileToBeCompressed.Position);
                         else
@@ -40,17 +38,24 @@ namespace GZipTest
                         lastBuffer = new byte[bytesToRead];
                         fileToBeCompressed.Read(lastBuffer, 0, bytesToRead);
                         var newBlock = new ByteBlock(_blockId, lastBuffer, new byte[0]);
-                        _readerQueue.Enqueue(newBlock);
+                        _readerQueue2.Enqueue(newBlock);
                         _blockId++;
-                        _readCounter++;
                     }
-                    _isReadCompleted = true;
+
+                    _blocksCount = _blockId-1;
+                    _readerQueue2.Stop();
                 }
             }
             catch (Exception ex)
             {
-                _errorMessage = ex.Message;
+                _errorMessage = $"Compression.Read: {ex.Message}";
                 _isError = true;
+            }
+            finally
+            {
+                Console.WriteLine($"Read exit");
+                _readerResetEvent.Set();
+                _isReadCompleted = true;
             }
         }
 
@@ -60,32 +65,34 @@ namespace GZipTest
             {
                 using (FileStream fileCompressed = new FileStream(_destinationFile, FileMode.Append))
                 {
-                    int counter = 0;
-                    while (true && !_isCancelled)
+                    int lastBlockId = 0;
+                    while (true && !_isCancelled && !_isError)
                     {
-                        if (_writerQueue.Count == 0 && !_isActionCompleted)
-                            continue;
-
-                        if (!_writerQueue.TryDequeue(out ByteBlock block))
-                        {
-                            if (_readCounter != counter)
-                                continue;
-                            else
-                                break;
-                        }
+                        var block = _writerQueue2.Dequeue();
+                        if (block == null)
+                            break;
 
                         BitConverter.GetBytes(block.Buffer.Length).CopyTo(block.Buffer, 4);
                         fileCompressed.Write(block.Buffer, 0, block.Buffer.Length);
-                        counter++;
-                    }
+                        Console.WriteLine($"{block.Id}");
+                        fileCompressed.Flush();
+                        lastBlockId = block.Id;
 
-                    _readerResetEvent.Set();
+                        if (lastBlockId == _blocksCount && _isReadCompleted)
+                            break;
+                    }
+                    _writerQueue2.Stop();
                 }
             }
             catch (Exception ex)
             {
-                _errorMessage = ex.Message;
+                _errorMessage = $"Compression.Write: {ex.Message}";
                 _isError = true;
+            }
+            finally 
+            {
+                Console.WriteLine($"Write exit");
+                _writerResetEvent.Set();
             }
         }
 
@@ -93,15 +100,16 @@ namespace GZipTest
         {
             try
             {
-                while (true && !_isCancelled)
+                while (true && !_isCancelled && !_isError)
                 {
-                    if (_readerQueue.Count == 0 && !_isReadCompleted)
+                    if (_readerQueue2.Count == 0 && !_isReadCompleted)
                         continue;
 
-                    if (!_readerQueue.TryDequeue(out ByteBlock block))
+                    ByteBlock block = _readerQueue2.Dequeue();
+                    if (block == null )
                         break;
 
-                    using (MemoryStream stream = new MemoryStream())
+                    using (MemoryStream stream = new MemoryStream(block.Buffer.Length))
                     {
                         using (GZipStream gZipStream = new GZipStream(stream, CompressionMode.Compress))
                         {
@@ -109,29 +117,21 @@ namespace GZipTest
                         }
 
                         byte[] compressedData = stream.ToArray();
-                        ByteBlock outData = new ByteBlock(block.Id, compressedData, new byte[0]);
+                        var outData = new ByteBlock(block.Id, compressedData, new byte[0]);
 
-                        lock (_locker)
-                        {
-                            while (outData.Id != _currentBlockId)
-                            {
-                                Monitor.Wait(_locker);
-                            }
-
-                            _writerQueue.Enqueue(outData);
-                            _currentBlockId++;
-                            Monitor.PulseAll(_locker);
-                        }
+                        _writerQueue2.EnqueueForWriting(outData);
                     }
                 }
-
-                _doneEvents[(int)i].Set();
-                _isActionCompleted = true;
             }
             catch (Exception ex)
             {
-                _errorMessage = ex.Message;
+                _errorMessage = $"Compression: {ex.Message}"; ;
                 _isError = true;
+            }
+            finally
+            {
+                Console.WriteLine($"Exit {(int)i}");
+                _doneEvents[(int)i].Set();
             }
         }
     }

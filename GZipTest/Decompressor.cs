@@ -10,27 +10,25 @@ namespace GZipTest
     {
         private int _counter;
         private volatile bool _isReadCompleted;
-        private volatile bool _isActionCompleted;
-        private volatile int _readCounter;
-        private object _locker;
+        private int _blocksCount;
 
         public Decompressor(string sourceFilePath, string destinationFilePath) : base(sourceFilePath, destinationFilePath)
         {
             _counter = 0;
             _isReadCompleted = false;
-            _isActionCompleted = false;
-            _locker = new object();
         }
 
         protected override void Read()
         {
-
             try
             {
                 using (FileStream compressedFile = new FileStream(_sourceFile, FileMode.Open))
                 {
                     while (compressedFile.Position < compressedFile.Length)
                     {
+                        if (_readerQueue2.Count > 10)
+                            continue;
+
                         byte[] blockLengthBuffer = new byte[8];
                         compressedFile.Read(blockLengthBuffer, 0, blockLengthBuffer.Length);
                         int blockLength = BitConverter.ToInt32(blockLengthBuffer, 4);
@@ -42,18 +40,23 @@ namespace GZipTest
                         byte[] lastBuffer = new byte[dataSize];
 
                         ByteBlock block = new ByteBlock(_counter, lastBuffer, compressedData);
-                        _readerQueue.Enqueue(block);
+                        _readerQueue2.Enqueue(block);
                         _counter++;
-                        _readCounter++;
                     }
 
-                    _isReadCompleted = true;
+                    _blocksCount = _counter - 1;
+                    _readerQueue2.Stop();
                 }
             }
             catch (Exception ex)
             {
-                _errorMessage = ex.Message;
+                _errorMessage = $"Decompression.Read: {ex.Message}";
                 _isError = true;
+            }
+            finally
+            {
+                _readerResetEvent.Set();
+                _isReadCompleted = true;
             }
         }
 
@@ -63,31 +66,35 @@ namespace GZipTest
             {
                 using (FileStream decompressedFile = new FileStream(_destinationFile, FileMode.Append))
                 {
-                    int counter = 0;
-                    while (true && !_isCancelled)
-                    {
-                        if (_writerQueue.Count == 0 && !_isActionCompleted)
-                            continue;
+                    int lastBlockId = 0;
 
-                        if (!_writerQueue.TryDequeue(out ByteBlock block))
-                        {
-                            if (_readCounter != counter)
-                                continue;
-                            else
-                                break;
-                        }
+                    while (true && !_isCancelled && !_isError)
+                    {
+                        var block = _writerQueue2.Dequeue();
+                        if (block == null)
+                            break;
 
                         decompressedFile.Write(block.Buffer, 0, block.Buffer.Length);
-                        counter++;
+                        Console.WriteLine($"Written block {block.Id}");
+                        decompressedFile.Flush();
+                        lastBlockId = block.Id;
+
+                        if (lastBlockId == _blocksCount && _isReadCompleted)
+                            break;
                     }
 
-                    _readerResetEvent.Set();
+                    _writerQueue2.Stop();
                 }
             }
             catch (Exception ex)
             {
-                _errorMessage = ex.Message;
+                _errorMessage = $"Decompression.Write: {ex.Message}";
                 _isError = true;
+
+            }
+            finally
+            {
+                _writerResetEvent.Set();
             }
         }
 
@@ -97,10 +104,11 @@ namespace GZipTest
             {
                 while (true && !_isCancelled)
                 {
-                    if (_readerQueue.Count == 0 && !_isReadCompleted)
+                    if (_readerQueue2.Count == 0 && !_isReadCompleted)
                         continue;
 
-                    if (!_readerQueue.TryDequeue(out ByteBlock block))
+                    var block = _readerQueue2.Dequeue();
+                    if (block == null)
                         break;
 
                     using (MemoryStream stream = new MemoryStream(block.CompressedBuffer))
@@ -110,29 +118,19 @@ namespace GZipTest
                             gZipStream.Read(block.Buffer, 0, block.Buffer.Length);
                             var decompressedData = block.Buffer.ToArray();
                             ByteBlock block2 = new ByteBlock(block.Id, decompressedData, new byte[0]);
-
-                            lock (_locker)
-                            {
-                                while (block2.Id != _currentBlockId)
-                                {
-                                    Monitor.Wait(_locker);
-                                }
-
-                                _writerQueue.Enqueue(block2);
-                                _currentBlockId++;
-                                Monitor.PulseAll(_locker);
-                            }
+                            _writerQueue2.EnqueueForWriting(block2);
                         }
                     }
                 }
-
-                _isActionCompleted = true;
-                _doneEvents[(int)i].Set();
             }
             catch (Exception ex)
             {
-                _errorMessage = ex.Message;
+                _errorMessage = $"Decompression: {ex.Message}";
                 _isError = true;
+            }
+            finally
+            {
+                _doneEvents[(int)i].Set();
             }
         }
     }
